@@ -1,0 +1,14 @@
+// Configuration for Jamma's version of Syncenlight
+
+#ifndef __SYNCENLIGHT_CONFIG_H__
+#define __SYNCENLIGHT_CONFIG_H__
+
+// poor man's access control: adds a prefix to the client ID which might be used as a secret to limit access
+// the your MQTT server. If you use Mosquitto, add "clientid_prefixes XXX" to your mosquitto.conf
+#define MQTT_CLIENT_PREFIX "XXX"
+
+#define MQTT_SERVER_DEFAULT "your-server-here.invalid"
+
+#define MQTT_TOPIC_DEFAULT "syncenlight"
+
+#endif // #ifndef __SYNCENLIGHT_CONFIG_H__
