@@ -1,6 +1,5 @@
-// SYNCENLIGHT BY NETZBASTELN
-// ZF18 Workshop version
-#define VERSION "0.6-nb"
+// Jamma's version, based on SYNCENLIGHT BY NETZBASTELN
+#define VERSION "0.8"
 
 #include <FS.h>                   // File system, this needs to be first.
 #include <ESP8266WiFi.h>          // ESP8266 Core WiFi Library
@@ -17,17 +16,20 @@
 
 #include <Ticker.h>
 
+#include "config.h" // move configuration (server name etc. out of this file)
 
 //---------------------------------------------------------
 // Pins
+// D4 = 2 (=internal LED)
 #define BUTTON_PIN 0 // D3
 #define PIXEL_PIN 4 // D2
 
 // Defaults
-char mqtt_server[40] = "netzbasteln.de";
-char publish_topic[40] = "syncenlight";
+char mqtt_server[40] = MQTT_SERVER_DEFAULT;
+char mqtt_clientid[40];
+char publish_topic[40] = MQTT_TOPIC_DEFAULT;
 
-unsigned int brightness = 255; // 0-255
+unsigned int brightness = 64; // 0-255
 
 
 //---------------------------------------------------------
@@ -42,7 +44,15 @@ WiFiManager wifiManager;
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
-Adafruit_NeoPixel leds = Adafruit_NeoPixel(2, PIXEL_PIN, NEO_RGBW + NEO_KHZ800); // NEO_RGBW for Wemos Mini LED Modules, NEO_GRB for most Stripes 
+#define PIXEL_VARIANT 2 // 1 = single Pixel, 2 = 7 Pixel Wemos Shield
+
+#if PIXEL_VARIANT == 1
+// SparkFun single Pixel
+Adafruit_NeoPixel leds = Adafruit_NeoPixel(1, PIXEL_PIN, NEO_GRBW + NEO_KHZ800);
+#else
+// WEMOS RGB Shield
+Adafruit_NeoPixel leds = Adafruit_NeoPixel(7, PIXEL_PIN, NEO_GRB + NEO_KHZ800); // NEO_RGBW for Wemos Mini LED Modules, NEO_GRB for most Stripes 
+#endif
 
 uint16_t hue = 0; // 0-359
 extern const uint8_t gamma8[];
@@ -71,7 +81,6 @@ void setup() {
   leds.begin();
   leds.setBrightness(brightness);
   blinkColor = leds.Color(10, 10, 10);
-  blinkTicker.attach(1, blinkLed);
   
   chipId.toUpperCase();
   chipId.toCharArray(chip_id_char_arr, 7);
@@ -80,17 +89,32 @@ void setup() {
   char ssid_char_arr[ssid_char_arr_size];
   ssid.toCharArray(ssid_char_arr, ssid_char_arr_size);
 
+  String clientid = MQTT_CLIENT_PREFIX + chipId;
+  clientid.toCharArray(mqtt_clientid, clientid.length()+1);
+  
   Serial.println("Hi!");
   Serial.print("Version: Syncenlight ");
   Serial.println(VERSION);
   Serial.print("Chip ID: ");
   Serial.println(chipId);
 
+#if PIXEL_VARIANT == 2
+  Serial.println("LED check red");
+  rotate_color(leds.Color(128,0,0));
+  Serial.println("LED check green");
+  rotate_color(leds.Color(0,128,0));
+  Serial.println("LED check blue");
+  rotate_color(leds.Color(0,0,128));
+#endif
+
+  blinkTicker.attach(1, blinkLed);
 
   // Read configuration from FS json.
   Serial.println("Mounting FS ...");
   // Clean FS, for testing
-  //SPIFFS.format();
+  /*if (SPIFFS.format()) {
+    Serial.println("FS formatted.");
+  }*/
   if (SPIFFS.begin()) {
     Serial.println("Mounted file system.");
     if (SPIFFS.exists("/config.json")) {
@@ -134,11 +158,11 @@ void setup() {
   // When button is pressed on start, go into config portal.
   if (digitalRead(BUTTON_PIN) == LOW) {
     blinkTicker.attach(0.1, blinkLed);
-    wifiManager.startConfigPortal(ssid_char_arr);
+    wifiManager.startConfigPortal(ssid_char_arr,"12345678");
     blinkTicker.attach(1, blinkLed);
   }
   else {
-    wifiManager.autoConnect(ssid_char_arr);    
+    wifiManager.autoConnect(ssid_char_arr,"12345678");
   }
 
   // We are connected.
@@ -174,12 +198,27 @@ void setup() {
 }
 
 
+
+void rotate_color(uint32_t color)
+{
+  for (uint16_t i=0; i<leds.numPixels(); i++) {
+    Serial.println(i);
+    leds.setPixelColor(i, color);
+    leds.show();
+    delay(200);
+  }  
+  leds.setPixelColor(0, color);
+  leds.show();
+}
+
+
 void loop() {
   // Debounce button
   buttonState = digitalRead(BUTTON_PIN);
   if (buttonState == LOW) {
     hue = (hue + 1) % 360;
-    updateLed();
+    Serial.println(hue);
+    UpdateLedLocal();
     delay(15);
   }
   if (lastButtonState == LOW && buttonState == HIGH) {
@@ -221,7 +260,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     unsigned int newHue = s.toInt();
     if (newHue >= 0 && newHue < 360) {
       hue = newHue;
-      updateLed();
+      UpdateLedRemote();
     }
   }
 }
@@ -229,8 +268,9 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
 
 void mqtt_reconnect() {
   while (!mqttClient.connected()) {
-    Serial.println("Connecting MQTT...");
-    if (mqttClient.connect(chip_id_char_arr)) {
+    Serial.print("Connecting MQTT... client ID: ");
+    Serial.println(mqtt_clientid);
+    if (mqttClient.connect(mqtt_clientid)) {
       blinkTicker.detach();
       Serial.println("MQTT connected.");
       mqttClient.subscribe(publish_topic, 1); // QoS level 1
@@ -244,14 +284,28 @@ void mqtt_reconnect() {
 }
 
 
-void updateLed() {
+void UpdateLedLocal() {
   uint32_t color = HSVtoRGB(hue, 255, 255);
-  for (uint16_t i=0; i<leds.numPixels(); i++) {
-    leds.setPixelColor(i, color);
-  }
+  leds.setPixelColor(0, color);
   leds.show();
 }
 
+void UpdateLedRemote() {
+#if PIXEL_VARIANT == 1
+  UpdateledLocal();
+#else
+  uint32_t color = HSVtoRGB(hue, 255, 255);
+  uint32_t tcol;
+  for (uint16_t i=0; i<leds.numPixels(); i++)
+  {
+    tcol = leds.getPixelColor(i);
+    leds.setPixelColor(i,color);
+    color = tcol;
+  }
+  leds.show();
+  //rotate_color(color);
+#endif
+}
 
 
 void blinkLed() {
@@ -259,9 +313,7 @@ void blinkLed() {
     leds.clear(); 
   }
   else {
-    for (uint16_t i=0; i<leds.numPixels(); i++) {
-      leds.setPixelColor(i, blinkColor);
-    }
+    leds.setPixelColor(0, blinkColor);
   }
   leds.show();
   blinkTickerOn = !blinkTickerOn;
