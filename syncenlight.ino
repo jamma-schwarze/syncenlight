@@ -195,6 +195,7 @@ void setup() {
   mqttClient.setServer(mqtt_server, 1883);
   mqttClient.setCallback(mqtt_callback);
   Serial.println("MQTT client started.");
+  UpdateLedLocal();
 }
 
 
@@ -258,9 +259,9 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     payload[length] = '\0';
     String s = String((char*)payload);
     unsigned int newHue = s.toInt();
+    // note: we also receive our own update here!
     if (newHue >= 0 && newHue < 360) {
-      hue = newHue;
-      UpdateLedRemote();
+      UpdateLedRemote(newHue);
     }
   }
 }
@@ -290,13 +291,14 @@ void UpdateLedLocal() {
   leds.show();
 }
 
-void UpdateLedRemote() {
+void UpdateLedRemote(int newHue) {
 #if PIXEL_VARIANT == 1
+  hue = newHue
   UpdateledLocal();
 #else
-  uint32_t color = HSVtoRGB(hue, 255, 255);
+  uint32_t color = HSVtoRGB(newHue, 255, 255);
   uint32_t tcol;
-  for (uint16_t i=0; i<leds.numPixels(); i++)
+  for (uint16_t i=1; i<leds.numPixels(); i++)
   {
     tcol = leds.getPixelColor(i);
     leds.setPixelColor(i,color);
